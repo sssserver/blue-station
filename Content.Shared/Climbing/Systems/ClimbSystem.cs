@@ -12,6 +12,7 @@ using Content.Shared.Interaction;
 using Content.Shared.Movement.Events;
 using Content.Shared.Physics;
 using Content.Shared.Popups;
+using Content.Shared.Standing;
 using Content.Shared.Stunnable;
 using Content.Shared.Traits.Assorted.Components;
 using Content.Shared.Verbs;
@@ -32,7 +33,6 @@ public sealed partial class ClimbSystem : VirtualController
 {
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly ActionBlockerSystem _actionBlockerSystem = default!;
-    [Dependency] private readonly DamageableSystem _damageableSystem = default!;
     [Dependency] private readonly FixtureSystem _fixtureSystem = default!;
     [Dependency] private readonly SharedAudioSystem _audio = default!;
     [Dependency] private readonly SharedDoAfterSystem _doAfterSystem = default!;
@@ -41,6 +41,7 @@ public sealed partial class ClimbSystem : VirtualController
     [Dependency] private readonly SharedPhysicsSystem _physics = default!;
     [Dependency] private readonly SharedStunSystem _stunSystem = default!;
     [Dependency] private readonly SharedTransformSystem _xformSystem = default!;
+    [Dependency] private readonly DamageableSystem _damageable = default!;
 
     private const string ClimbingFixtureName = "climb";
     private const int ClimbingCollisionGroup = (int) (CollisionGroup.TableLayer | CollisionGroup.LowImpassable);
@@ -61,6 +62,8 @@ public sealed partial class ClimbSystem : VirtualController
         SubscribeLocalEvent<ClimbingComponent, ClimbDoAfterEvent>(OnDoAfter);
         SubscribeLocalEvent<ClimbingComponent, EndCollideEvent>(OnClimbEndCollide);
         SubscribeLocalEvent<ClimbingComponent, BuckledEvent>(OnBuckled);
+        SubscribeLocalEvent<ClimbingComponent, StandAttemptEvent>(OnStandAttempt);
+        SubscribeLocalEvent<ClimbingComponent, DownedEvent>(OnDowned);
 
         SubscribeLocalEvent<ClimbableComponent, CanDropTargetEvent>(OnCanDragDropOn);
         SubscribeLocalEvent<ClimbableComponent, GetVerbsEvent<AlternativeVerb>>(AddClimbableVerb);
@@ -521,14 +524,53 @@ public sealed partial class ClimbSystem : VirtualController
         if (TryComp<PhysicsComponent>(args.Climber, out var physics) && physics.Mass <= component.MassLimit)
             return;
 
-        _damageableSystem.TryChangeDamage(args.Climber, component.ClimberDamage, origin: args.Climber);
-        _damageableSystem.TryChangeDamage(uid, component.TableDamage, origin: args.Climber);
+        _damageable.TryChangeDamage(args.Climber, component.ClimberDamage, origin: args.Climber);
+        _damageable.TryChangeDamage(uid, component.TableDamage, origin: args.Climber);
         _stunSystem.TryParalyze(args.Climber, TimeSpan.FromSeconds(component.StunTime), true);
 
         // Not shown to the user, since they already get a 'you climb on the glass table' popup
         _popupSystem.PopupEntity(
             Loc.GetString("glass-table-shattered-others", ("table", uid), ("climber", Identity.Entity(args.Climber, EntityManager))), args.Climber,
             Filter.PvsExcept(args.Climber), true);
+    }
+
+    private void OnStandAttempt(EntityUid uid, ClimbingComponent component, ref StandAttemptEvent args)
+    {
+        // If we are not crawling but not climbing (i.e. under a table, not above), then check if there's anything
+        // to bonk our head on when we get up.
+        if (!component.IsClimbing)
+        {
+            foreach (var collidingEntity in _physics.GetEntitiesIntersectingBody(
+                uid,
+                StandingStateSystem.StandingCollisionLayer))
+            {
+                args.Cancel();
+                return;
+            }
+        }
+        else
+        {
+            foreach (var disabledMask in component.DisabledFixtureMasks)
+            {
+                component.DisabledFixtureMasks[disabledMask.Key] = disabledMask.Value | StandingStateSystem.StandingCollisionLayer;
+            }
+        }
+    }
+
+    void OnDowned(EntityUid uid, ClimbingComponent component, ref DownedEvent args)
+    {
+        if (component.IsClimbing)
+        {
+            foreach (var disabledMask in component.DisabledFixtureMasks)
+            {
+                // TODO: More sophisticated behavior than this, as well as for equivalent in OnStandAttempt.
+                // Essentially certain hitbox/fixture masks are disabled when you climb, and it reapplies them later
+                // by storing them in DisabledFixtureMasks. However, if we get up or climb down, we need to change
+                // DisabledFixtureMasks so that when you get off the climb, the proper fixture masks are restored.
+                // This works for now but makes assumptions about StandingCollisionLayer being a universal norm.
+                component.DisabledFixtureMasks[disabledMask.Key] = disabledMask.Value & ~StandingStateSystem.StandingCollisionLayer;
+            }
+        }
     }
 
     [Serializable, NetSerializable]

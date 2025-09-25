@@ -10,17 +10,11 @@ public sealed partial class LayingDownComponent : Component
     public TimeSpan StandingUpTime = TimeSpan.FromSeconds(1);
 
     [DataField, AutoNetworkedField]
-    public float LyingSpeedModifier = 0.175f,
+    public float LyingSpeedModifier = 0.30f,
                  CrawlingUnderSpeedModifier = 0.125f;
 
     [DataField, AutoNetworkedField]
     public bool AutoGetUp;
-
-    /// <summary>
-    ///     If true, the entity is choosing to crawl under furniture. This is purely visual and has no effect on physics.
-    /// </summary>
-    [DataField, AutoNetworkedField]
-    public bool IsCrawlingUnder = false;
 
     [DataField, AutoNetworkedField]
     public int NormalDrawDepth = (int) DrawDepth.DrawDepth.Mobs,
